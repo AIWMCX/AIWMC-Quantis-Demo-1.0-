@@ -1,0 +1,198 @@
+# Quantis — Failure Modes
+
+> Production failure modes observed in Quantis between launch (January 2026) and month three (April 2026), and how the system addresses each.
+
+This document is honest about where Quantis breaks. Every production AI system has failure modes; engineering quality is measured by how thoroughly they're catalogued, detected, and bounded — not by whether they exist. The twelve-test validation harness in Quantis 2.0 is a direct response to the failures listed here.
+
+Each entry uses the same shape:
+
+- **Severity** — P0 (production-down or correctness violation), P1 (user-visible regression), P2 (degraded experience)
+- **First observed** — month relative to launch
+- **Status** — Resolved · Mitigated · Tracked · Open
+- **Trigger / Symptom / Detection / Mitigation**
+
+---
+
+## A. Output integrity — LLM-side failures
+
+### A1. Industry misclassification
+**Severity:** P0 · **First observed:** Month 1 · **Status:** Mitigated (Quantis 2.0 closes it)
+
+**Trigger.** A business with regional or cultural specificity (e.g., a Caucasian-Russian style hookah lounge) is misclassified into a generic adjacent category (e.g., "café"). Every downstream number — gross margin, CAC, average order value — is then anchored to the wrong benchmark.
+
+**Symptom.** Unit economics that look plausible on the surface but reference the wrong industry. The user can't easily detect this; the analysis is internally consistent but externally wrong.
+
+**Detection.** Audit-log review of low-confidence classification scores. Industry classifications below a calibrated confidence threshold are now flagged before downstream analysis runs.
+
+**Mitigation.** Quantis 2.0 introduces a dedicated industry-classification agent with a NAICS-grounded vocabulary, a fallback to a "specialty / one-of-a-kind" archetype where confidence is low, and a user-confirmation step before downstream layers run.
+
+### A2. Contradictory unit economics
+**Severity:** P0 · **First observed:** Month 1 · **Status:** Resolved
+
+**Trigger.** The revenue model assumes one operating profile (e.g., high-volume, low-margin) while the cost structure assumes another (e.g., boutique, high-margin). The two halves of the analysis disagree.
+
+**Symptom.** LTV/CAC ratios that don't reconcile with the stated gross margin. Internal consistency check fails.
+
+**Detection.** Automated cross-section reconciliation: gross margin from the cost-structure section is compared against gross margin implied by the revenue-model section. Divergence above a threshold halts the analysis.
+
+**Mitigation.** Cross-section reconciliation is one of the twelve tests in Quantis 2.0. Failed reconciliation triggers an automatic retry with corrective context rather than returning a broken analysis.
+
+### A3. Cost miscategorization
+**Severity:** P1 · **First observed:** Month 1 · **Status:** Resolved
+
+**Trigger.** An operating expense is classified as cost-of-goods-sold, or vice versa. The error propagates into gross margin, contribution margin, and break-even calculations.
+
+**Symptom.** Margins that look 10–20 percentage points off industry medians without explanation.
+
+**Detection.** Cost-categorization validator checks each cost item against a category-level allowlist for the detected industry.
+
+**Mitigation.** Categorization is now schema-enforced at the model boundary — the LLM cannot return a cost without choosing from a constrained category set tied to the industry.
+
+### A4. Hallucinated benchmarks
+**Severity:** P0 · **First observed:** Month 1 · **Status:** Resolved
+
+**Trigger.** The model invents an industry median ("typical CAC for this category is $42") rather than using the benchmark rows passed in as context.
+
+**Symptom.** Benchmarks in the output that don't exist in the benchmark store.
+
+**Detection.** Every benchmark cited in the output is cross-checked against `benchmark_grounding` source rows. Unmatched citations fail validation.
+
+**Mitigation.** Outputs are required to cite benchmark source rows by ID. Citations that don't resolve to a real row are rejected. This is enforced in the schema, not the prompt.
+
+### A5. Token-limit truncation on long descriptions
+**Severity:** P1 · **First observed:** Month 2 · **Status:** Resolved
+
+**Trigger.** A user submits a 3,500-word business description; the model's output is cut off mid-section.
+
+**Symptom.** Analyses missing the risk-factors section.
+
+**Detection.** Schema validator flags incomplete output.
+
+**Mitigation.** Hard input limit of 4,000 characters with client-side enforcement, plus automatic summarization of inputs above 2,500 characters before they reach the model.
+
+### A6. Premature optimization bias
+**Severity:** P2 · **First observed:** Month 2 · **Status:** Tracked
+
+**Trigger.** The model optimizes for cost-cutting when the user is in growth mode (or vice versa).
+
+**Symptom.** Risk factors framed around "reduce CAC" when the user explicitly asked about scaling.
+
+**Detection.** No automated detection yet — surfaced via user feedback.
+
+**Mitigation.** The user's stated stage (idea / pre-revenue / growth / scale) is now a required input and is passed into the prompt. Quantis 2.0 will treat stage as a router input rather than a free-text signal.
+
+---
+
+## B. Data correctness — grounding failures
+
+### B1. Stale benchmark on fast-moving industries
+**Severity:** P1 · **First observed:** Month 2 · **Status:** Mitigated
+
+**Trigger.** Benchmarks for fast-moving categories (AI tools, crypto-adjacent businesses) drift faster than the quarterly refresh cadence.
+
+**Symptom.** Outputs anchor to medians that are 6–12 months behind reality.
+
+**Detection.** Per-industry `last_updated` timestamps surfaced in the API response.
+
+**Mitigation.** Fast-moving industries are flagged with a `coverage_score` and a freshness disclaimer in the user-facing output. Refresh cadence for flagged industries moved from quarterly to monthly.
+
+### B2. Regional cost data sparsity
+**Severity:** P1 · **First observed:** Month 2 · **Status:** Tracked
+
+**Trigger.** A user submits a business in a region with thin benchmark coverage (e.g., a city of 80,000 in the Mountain West).
+
+**Symptom.** Cost estimates fall back to national medians without flagging that they did.
+
+**Detection.** Coverage score per region is computed but not yet surfaced to the user.
+
+**Mitigation.** Coverage transparency is a v1.1 scope item — every cost line will indicate whether it was anchored regionally, nationally, or industry-only.
+
+---
+
+## C. System reliability — infra failures
+
+### C1. SPA invisible to search engines
+**Severity:** P0 (growth) · **First observed:** Month 1 · **Status:** Resolved (in flight)
+
+**Trigger.** Quantis launched as a pure client-rendered SPA. Googlebot received an empty shell on every public page. Organic acquisition was structurally impossible.
+
+**Symptom.** Zero organic traffic 60 days post-launch despite content marketing.
+
+**Detection.** Search Console showed zero indexed content pages. Direct curl of public URLs returned a JS shell.
+
+**Mitigation.** Migration of the marketing surface to Next.js static rendering. The application surface remains client-rendered behind auth.
+
+### C2. Stripe webhook race on first-purchase credit grant
+**Severity:** P0 · **First observed:** Month 2 · **Status:** Resolved
+
+**Trigger.** A user pays, the Stripe webhook arrives before the redirect-back finishes, and the credit-grant code path fires twice — or, in a worse race, not at all.
+
+**Symptom.** A small fraction of paying users were either double-credited or never credited.
+
+**Detection.** Reconciliation job comparing Stripe's `payment_intent.succeeded` events against the `webhook_events` table.
+
+**Mitigation.** Webhook handler is now strictly idempotent on `event.id` with a unique constraint. The redirect-back path is read-only — credit grants happen only on webhook delivery.
+
+### C3. PDF generation memory blowup
+**Severity:** P1 · **First observed:** Month 3 · **Status:** Resolved
+
+**Trigger.** Long validations with extensive risk-factor sections caused the headless renderer to exceed the edge function's memory limit.
+
+**Symptom.** Document generation fails for ~2% of validations.
+
+**Detection.** Sentry error spike on the `documents` endpoint.
+
+**Mitigation.** Streamed rendering with bounded chunks. Documents above a size threshold are generated asynchronously with a polling endpoint.
+
+### C4. Supabase RLS misconfiguration on a join table
+**Severity:** P0 · **First observed:** Month 1 · **Status:** Resolved (caught in staging, never reached production)
+
+**Trigger.** A new join table linking validations to documents was added without row-level security policies. Cross-tenant read was theoretically possible.
+
+**Symptom.** None in production — the gap was caught by a pre-deploy schema linter.
+
+**Detection.** Custom CI check enumerates every table in the public schema and fails the build if any lack an RLS policy.
+
+**Mitigation.** RLS-required CI gate is now standard for every schema change.
+
+---
+
+## D. Growth and UX — activation failures
+
+These aren't infra failures; they are engineering problems. Treating them otherwise is what kills early-stage products.
+
+### D1. Near-zero first-session activation
+**Severity:** P0 (growth) · **First observed:** Month 1 · **Status:** Mitigated
+
+**Trigger.** New users land, see a complex form, don't know what to type, abandon. The product's depth was the obstacle.
+
+**Symptom.** Sub-5% activation in the first 60 days, consistent with the floor of fintech and BI SaaS as a category.
+
+**Detection.** PostHog funnel: landing → signup → first validation submitted. Drop-off concentrated at "first validation submitted."
+
+**Mitigation.** Pre-filled examples for the seven most common archetypes; a one-click "validate this example" path that produces a full analysis the user can then customize.
+
+### D2. Over-trust in the initial output
+**Severity:** P2 · **First observed:** Month 2 · **Status:** Tracked
+
+**Trigger.** Users treat the first validation as a verdict instead of a starting point. They don't iterate on assumptions.
+
+**Symptom.** Average analyses per user per month plateaued at ~1.4.
+
+**Detection.** PostHog cohort analysis: users who run a second analysis within seven days have 4× higher 30-day retention.
+
+**Mitigation.** Quantis 2.0 surfaces explicit assumption inputs with a "what happens if this changes" affordance, encouraging iterative use.
+
+---
+
+## What's open
+
+- **Adversarial inputs.** A user who deliberately tries to break the model — contradictory descriptions, out-of-distribution business types, prompt-injection attempts in the description field — is currently handled by the schema validator, not by an explicit adversarial layer. This is on the Quantis 2.0 roadmap.
+- **Multi-currency edge cases.** Non-USD currencies pass through but benchmark grounding remains USD-anchored. The real fix requires localized benchmark sets.
+- **One-of-a-kind business types.** Concepts with no real industry analogue currently fall back to the closest archetype with a coverage warning. The better long-term answer is unclear; this may be a "no answer" case the product should refuse to attempt.
+
+---
+
+## How this document is maintained
+
+Every production incident generates an entry. Every entry has a status that updates as the underlying issue resolves. The benchmark dataset has its own changelog (private). Quantis 2.0's twelve failure-mode tests map one-to-one onto the entries in section A.
