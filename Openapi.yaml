@@ -1,0 +1,517 @@
+openapi: 3.0.3
+info:
+  title: Quantis API
+  description: |
+    Public REST API for the AIWMC Quantis financial-validation engine.
+
+    **Status.** v1 in development. Public availability target: Q3 2026.
+    The internal API follows the shapes documented here; this specification
+    is the contract that public access will conform to.
+
+    **Authentication.** All requests require a Bearer token in the
+    `Authorization` header. API keys are formatted `qnt_live_*` for production
+    and `qnt_test_*` for the sandbox.
+
+    **Rate limits.** Per-account, per-tier. Limit headers are returned on
+    every response: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+    `X-RateLimit-Reset`.
+
+    **Errors.** Errors return a structured body with `code`, `message`,
+    optional `field`, optional `suggestion`, and a `request_id` for support.
+  version: 1.0.0
+  contact:
+    name: Bogdan Jeltov — AIWMC AI Agency LLC
+    url: https://aiwmcquantis.com
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.aiwmcquantis.com/v1
+    description: Production
+  - url: https://api.staging.aiwmcquantis.com/v1
+    description: Staging
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Validations
+    description: Submit and retrieve business validation analyses
+  - name: Benchmarks
+    description: Industry benchmarks used to ground validations
+  - name: Documents
+    description: Generate professional documents from validations
+  - name: Account
+    description: Account and usage information
+
+paths:
+
+  /validations:
+    post:
+      tags: [Validations]
+      summary: Create a validation
+      description: |
+        Submits a business description for analysis. Returns the validation
+        in `pending` state immediately; poll the GET endpoint for completion.
+        Typical completion time is 8–25 seconds.
+      operationId: createValidation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidationRequest'
+            example:
+              business_description: "A Caucasian–Russian style hookah lounge in central Denver, targeting young professionals 25–40, open evenings, with a curated cocktail program and live acoustic music three nights a week."
+              location:
+                country: US
+                region: CO
+                city: Denver
+              stage: idea
+              currency: USD
+      responses:
+        '202':
+          description: Accepted — validation queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Validation'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    get:
+      tags: [Validations]
+      summary: List validations
+      operationId: listValidations
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - in: query
+          name: cursor
+          description: Opaque cursor from a previous response
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [pending, complete, failed]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Validation'
+                  next_cursor:
+                    type: string
+                    nullable: true
+
+  /validations/{validation_id}:
+    get:
+      tags: [Validations]
+      summary: Retrieve a validation
+      operationId: getValidation
+      parameters:
+        - in: path
+          name: validation_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Validation'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /benchmarks/industries:
+    get:
+      tags: [Benchmarks]
+      summary: List industries with benchmark coverage
+      operationId: listIndustries
+      parameters:
+        - in: query
+          name: search
+          schema:
+            type: string
+        - in: query
+          name: min_coverage
+          description: Minimum coverage score (0–1)
+          schema:
+            type: number
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Industry'
+
+  /benchmarks/industries/{industry_id}:
+    get:
+      tags: [Benchmarks]
+      summary: Retrieve benchmarks for an industry
+      operationId: getIndustryBenchmark
+      parameters:
+        - in: path
+          name: industry_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IndustryBenchmark'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /documents:
+    post:
+      tags: [Documents]
+      summary: Generate a document from a validation
+      operationId: createDocument
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DocumentRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Document'
+
+  /me:
+    get:
+      tags: [Account]
+      summary: Current account
+      operationId: getAccount
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key (qnt_live_* or qnt_test_*)
+
+  schemas:
+
+    ValidationRequest:
+      type: object
+      required: [business_description]
+      properties:
+        business_description:
+          type: string
+          minLength: 50
+          maxLength: 4000
+        location:
+          type: object
+          properties:
+            country:
+              type: string
+              example: US
+            region:
+              type: string
+              example: CO
+            city:
+              type: string
+              example: Denver
+        stage:
+          type: string
+          description: Where the business is on its lifecycle
+          enum: [idea, pre_revenue, growth, scale]
+          default: idea
+        currency:
+          type: string
+          default: USD
+
+    Validation:
+      type: object
+      properties:
+        id:
+          type: string
+          example: val_01HMZQ8X9K2P3R4S5T6V7W8X9Y
+        status:
+          type: string
+          enum: [pending, complete, failed]
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        business_description:
+          type: string
+        analysis:
+          allOf:
+            - $ref: '#/components/schemas/FinancialAnalysis'
+          nullable: true
+        failure_modes_passed:
+          type: integer
+          description: Number of failure-mode tests passed
+        failure_modes_total:
+          type: integer
+
+    FinancialAnalysis:
+      type: object
+      properties:
+        industry:
+          $ref: '#/components/schemas/IndustryClassification'
+        revenue_model:
+          type: object
+          properties:
+            primary_streams:
+              type: array
+              items:
+                type: string
+            estimated_aov:
+              type: number
+            estimated_volume_monthly:
+              type: number
+        unit_economics:
+          type: object
+          properties:
+            gross_margin:
+              type: number
+            cac:
+              type: number
+            ltv:
+              type: number
+            ltv_cac_ratio:
+              type: number
+        cost_structure:
+          type: object
+          properties:
+            fixed_monthly:
+              type: number
+            variable_per_unit:
+              type: number
+            major_categories:
+              type: array
+              items:
+                type: object
+                properties:
+                  category:
+                    type: string
+                  estimated_amount:
+                    type: number
+        risk_factors:
+          type: array
+          items:
+            $ref: '#/components/schemas/RiskFactor'
+        benchmark_grounding:
+          type: array
+          description: Benchmark rows used to ground this analysis. Every numeric claim references at least one source.
+          items:
+            type: object
+            properties:
+              source_table:
+                type: string
+              source_row_id:
+                type: string
+              field_grounded:
+                type: string
+
+    IndustryClassification:
+      type: object
+      properties:
+        primary:
+          type: string
+          example: specialty entertainment venue
+        naics_code:
+          type: string
+          example: "713990"
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+    RiskFactor:
+      type: object
+      properties:
+        name:
+          type: string
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        likelihood:
+          type: string
+          enum: [unlikely, possible, likely, near_certain]
+        description:
+          type: string
+        mitigation:
+          type: string
+
+    Industry:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        naics_code:
+          type: string
+        coverage_score:
+          type: number
+          description: 0–1, depth of benchmark coverage for this industry
+
+    IndustryBenchmark:
+      type: object
+      properties:
+        industry:
+          $ref: '#/components/schemas/Industry'
+        median_gross_margin:
+          type: number
+        median_cac:
+          type: number
+        median_ltv:
+          type: number
+        sample_size:
+          type: integer
+        last_updated:
+          type: string
+          format: date
+
+    DocumentRequest:
+      type: object
+      required: [validation_id, type]
+      properties:
+        validation_id:
+          type: string
+        type:
+          type: string
+          enum: [validation_report, financial_summary, invoice]
+
+    Document:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        validation_id:
+          type: string
+        download_url:
+          type: string
+          format: uri
+        expires_at:
+          type: string
+          format: date-time
+
+    Account:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        plan:
+          type: string
+          enum: [free, starter, pro, enterprise]
+        usage:
+          type: object
+          properties:
+            validations_this_period:
+              type: integer
+            validations_limit:
+              type: integer
+            period_resets_at:
+              type: string
+              format: date-time
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              example: validation_failed
+            message:
+              type: string
+            field:
+              type: string
+              nullable: true
+            suggestion:
+              type: string
+              nullable: true
+            request_id:
+              type: string
+
+  responses:
+
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid API key
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    PaymentRequired:
+      description: Plan does not include this capability or quota exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
